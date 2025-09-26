@@ -19,7 +19,7 @@ Gem::Specification.new do |gem|
 
   gem.required_ruby_version = ">= 2.7.0"
 
-  gem.add_dependency "activerecord", ">= 6.0.0"
+  gem.add_dependency "activerecord", "~> 8.0.2"
 
   gem.add_development_dependency "psych", ">= 4.0"
   gem.add_development_dependency "rack"

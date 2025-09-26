@@ -35,6 +35,12 @@ module Makara
 end
 
 ActiveSupport.on_load(:active_record) do
+  ActiveRecord::ConnectionAdapters.register(
+      'makara_mysql2',
+      'ActiveRecord::ConnectionAdapters::MakaraMysql2Adapter',
+      'active_record/connection_adapters/makara_mysql2_adapter'
+  )
+
   ActiveRecord::LogSubscriber.log_subscribers.each do |subscriber|
     subscriber.extend Makara::Logging::Subscriber
   end

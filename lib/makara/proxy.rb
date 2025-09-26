@@ -60,6 +60,7 @@ module Makara
     attr_reader :error_handler, :sticky, :config_parser, :control
 
     def initialize(config)
+      puts "=config======#{config.inspect}===="
       @config         = config.symbolize_keys
       @config_parser  = Makara::ConfigParser.new(@config)
       @id             = @config_parser.id
@@ -69,8 +70,45 @@ module Makara
       @error_handler ||= ::Makara::ErrorHandler.new
       @skip_sticking = false
       instantiate_connections
-      super(config)
+      # super(config)
+      delegate_to = @primary_pool&.connections&.first&._makara_connection || Object.new
+      super(delegate_to)
     end
+
+    # def initialize(config)
+    #   puts "=config======#{config.inspect}===="
+    #
+    #   begin
+    #     puts "=======setting up instance variables===="
+    #     @config         = config.symbolize_keys
+    #     @config_parser  = Makara::ConfigParser.new(@config)
+    #     @id             = @config_parser.id
+    #     @ttl            = @config_parser.makara_config[:primary_ttl]
+    #     @sticky         = @config_parser.makara_config[:sticky]
+    #     @hijacked       = false
+    #     @error_handler ||= ::Makara::ErrorHandler.new
+    #     @skip_sticking = false
+    #     @in_any_connection = false
+    #     puts "=======instance variables set===="
+    #
+    #     puts "=======about to call instantiate_connections===="
+    #     instantiate_connections
+    #     puts "=======instantiate_connections returned===="
+    #
+    #     puts "=======@primary_pool after instantiate: #{@primary_pool.inspect}===="
+    #     puts "=======@replica_pool after instantiate: #{@replica_pool.inspect}===="
+    #
+    #     # Don't call super with config, either call it with a proper delegate object or not at all
+    #     # For now, let's try without calling super to see if that fixes the issue
+    #     puts "=======skipping super call for debugging===="
+    #       # super(delegate_to)
+    #
+    #   rescue => e
+    #     puts "=======ERROR in initialize: #{e.class}: #{e.message}===="
+    #     puts "=======Backtrace: #{e.backtrace.first(10).join("\n")}===="
+    #     raise e
+    #   end
+    # end
 
     def without_sticking
       @skip_sticking = true
@@ -171,18 +209,53 @@ module Makara
 
     ruby2_keywords :send_to_all if Module.private_method_defined?(:ruby2_keywords)
 
+    # def any_connection(&block)
+    #   puts "===primar==#{@primary_pool.inspect}===replica==#{@replica_pool.inspect}="
+    #   if @primary_pool.disabled
+    #     puts "=====111==inside if===="
+    #     @replica_pool.provide(&block)
+    #   else
+    #     puts "=====222==inside else="
+    #     @primary_pool.provide(&block)
+    #   end
+    # rescue ::Makara::Errors::AllConnectionsBlacklisted, ::Makara::Errors::NoConnectionsAvailable
+    #   begin
+    #     puts "=====inside===begin==="
+    #     @primary_pool.disabled = true
+    #     @replica_pool.provide(&block)
+    #   ensure
+    #     puts "======after==ensure"
+    #     @primary_pool.disabled = false
+    #   end
+    # end
+
+
     def any_connection(&block)
-      if @primary_pool.disabled
-        @replica_pool.provide(&block)
-      else
-        @primary_pool.provide(&block)
-      end
-    rescue ::Makara::Errors::AllConnectionsBlacklisted, ::Makara::Errors::NoConnectionsAvailable
+      # Add a guard to prevent infinite recursion
+      return if @in_any_connection
+
+      @in_any_connection = true
+
       begin
-        @primary_pool.disabled = true
-        @replica_pool.provide(&block)
+        puts "===primar==#{@primary_pool.inspect}===replica==#{@replica_pool.inspect}="
+        if @primary_pool.disabled
+          puts "=====111==inside if===="
+          @replica_pool.provide(&block)
+        else
+          puts "=====222==inside else="
+          @primary_pool.provide(&block)
+        end
+      rescue ::Makara::Errors::AllConnectionsBlacklisted, ::Makara::Errors::NoConnectionsAvailable
+        begin
+          puts "=====inside===begin==="
+          @primary_pool.disabled = true
+          @replica_pool.provide(&block)
+        ensure
+          puts "======after==ensure"
+          @primary_pool.disabled = false
+        end
       ensure
-        @primary_pool.disabled = false
+        @in_any_connection = false
       end
     end
 
@@ -296,19 +369,70 @@ module Makara
     end
 
     # use the config parser to generate a primary and replica pool
-    def instantiate_connections
-      @primary_pool = Makara::Pool.new('primary', self)
-      @config_parser.primary_configs.each do |primary_config|
-        @primary_pool.add primary_config do
-          graceful_connection_for(primary_config)
-        end
-      end
+    # def instantiate_connections
+    #   puts "=======inside instantiate connection===="
+    #   @primary_pool = Makara::Pool.new('primary', self)
+    #   @config_parser.primary_configs.each do |primary_config|
+    #     @primary_pool.add primary_config do
+    #       graceful_connection_for(primary_config)
+    #     end
+    #   end
+    #
+    #   @replica_pool = Makara::Pool.new('replica', self)
+    #   @config_parser.replica_configs.each do |replica_config|
+    #     @replica_pool.add replica_config do
+    #       graceful_connection_for(replica_config)
+    #     end
+    #   end
+    #   puts "====primary_pool===#{@primary_pool.inspect}===="
+    #   puts "====replica_pool===#{@replica_pool.inspect}===="
+    # end
 
-      @replica_pool = Makara::Pool.new('replica', self)
-      @config_parser.replica_configs.each do |replica_config|
-        @replica_pool.add replica_config do
-          graceful_connection_for(replica_config)
+    def instantiate_connections
+      puts "=======inside instantiate connection===="
+
+      begin
+        # Initialize both pools first to avoid circular dependency
+        puts "=======creating primary pool===="
+        @primary_pool = Makara::Pool.new('primary', self)
+        puts "=======primary pool created===="
+
+        puts "=======creating replica pool===="
+        @replica_pool = Makara::Pool.new('replica', self)
+        puts "=======replica pool created===="
+
+        # Now add connections to primary pool
+        puts "=======processing primary configs===="
+        @config_parser.primary_configs.each do |primary_config|
+          puts "=======adding primary config: #{primary_config.inspect}===="
+          @primary_pool.add primary_config do
+            graceful_connection_for(primary_config)
+          end
+          puts "=======primary config added===="
         end
+        puts "=======finished primary configs===="
+
+        # Now add connections to replica pool
+        puts "=======processing replica configs===="
+        puts "=======replica configs: #{@config_parser.replica_configs.inspect}===="
+        @config_parser.replica_configs.each do |replica_config|
+          puts "=======adding replica config: #{replica_config.inspect}===="
+          @replica_pool.add replica_config do
+            graceful_connection_for(replica_config)
+          end
+          puts "=======replica config added===="
+        end
+        puts "=======finished replica configs===="
+
+        puts "====primary_pool===#{@primary_pool.inspect}===="
+        puts "====replica_pool===#{@replica_pool.inspect}===="
+        puts "=======instantiate_connections completed successfully===="
+
+      rescue => e
+        puts "=======ERROR in instantiate_connections: #{e.class}: #{e.message}===="
+        puts "=======Backtrace: #{e.backtrace.first(5).join("\n")}===="
+        puts "=======@replica_pool at error: #{@replica_pool.inspect}===="
+        raise e
       end
     end
 
@@ -326,8 +450,57 @@ module Makara
       @replica_pool.disabled = false
     end
 
-    def connection_for(_config)
-      Kernel.raise NotImplementedError
+    # def connection_for(_config)
+    #   Kernel.raise NotImplementedError
+    # end
+
+    # def connection_for(config)
+    #   # This should create and return an actual database connection
+    #   # For MySQL2, this would typically be something like:
+    #
+    #   # Remove makara-specific keys that MySQL2 doesn't understand
+    #   connection_config = config.dup
+    #   connection_config.delete(:makara)
+    #   connection_config.delete(:primary_ttl)
+    #   connection_config.delete(:blacklist_duration)
+    #   connection_config.delete(:sticky)
+    #   connection_config.delete(:primary_strategy)
+    #   connection_config.delete(:name)
+    #
+    #   # Create the actual MySQL2 connection
+    #   Mysql2::Client.new(connection_config)
+    # end
+
+    # def connection_for(config)
+    #   puts "======config connection==#{config}"
+    #   connection_config = config.dup
+    #   connection_config[:charset] = connection_config.delete(:encoding) if connection_config[:encoding]
+    #   %i[makara primary_ttl blacklist_duration sticky primary_strategy name].each { |k| connection_config.delete(k) }
+    #
+    #   begin
+    #     Mysql2::Client.new(connection_config)
+    #   rescue => e
+    #     puts "MYSQL CONNECTION FAILED: #{e.class} - #{e.message} (#{connection_config.inspect})"
+    #     raise
+    #   end
+    # end
+
+    def connection_for(config)
+      puts "======config connection==#{config}"
+      connection_config = config.dup
+      connection_config[:charset] = connection_config.delete(:encoding) if connection_config[:encoding]
+      %i[makara primary_ttl blacklist_duration sticky primary_strategy name].each { |k| connection_config.delete(k) }
+
+      begin
+        # Use ActiveRecord to build the adapter
+        spec = ActiveRecord::Base.send(:resolve_config_for_connection, connection_config)
+        conn = ActiveRecord::Base.send(:new_connection, spec)
+
+        conn
+      rescue => e
+        puts "MYSQL CONNECTION FAILED: #{e.class} - #{e.message} (#{connection_config.inspect})"
+        raise
+      end
     end
   end
 end

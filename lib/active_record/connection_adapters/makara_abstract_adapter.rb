@@ -90,7 +90,7 @@ module ActiveRecord
         end
       end
 
-      hijack_method :execute, :exec_query, :exec_no_cache, :exec_cache, :transaction
+      hijack_method :execute, :exec_query, :exec_no_cache, :exec_cache, :transaction, :internal_exec_query
       send_to_all :connect, :reconnect!, :verify!, :clear_cache!, :reset!
 
       control_method :close, :steal!, :expire, :lease, :in_use?, :owner, :schema_cache, :pool=, :pool,
@@ -212,7 +212,7 @@ module ActiveRecord
           @proxy = proxy
           @owner = nil
           @pool = nil
-          @schema_cache = ActiveRecord::ConnectionAdapters::SchemaCache.new @proxy
+          @schema_cache = ActiveRecord::ConnectionAdapters::SchemaReflection.new @proxy
           @idle_since = Concurrent.monotonic_time
           @adapter = ActiveRecord::ConnectionAdapters::AbstractAdapter.new(@proxy)
         end

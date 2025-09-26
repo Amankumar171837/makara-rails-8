@@ -18,10 +18,13 @@ module Makara
       @blacklist_errors = []
       @disabled         = false
       if proxy.shard_aware_for(role)
+        puts "======inside if=="
         @strategy = Makara::Strategies::ShardAware.new(self)
         @shard_strategy_class = proxy.strategy_class_for(proxy.strategy_name_for(role))
+        puts "===shardstrategy===#{@shard_strategy_class.inspect}"
         @default_shard = proxy.default_shard_for(role)
       else
+        puts "=======inside===else"
         @strategy = proxy.strategy_for(role)
       end
     end
